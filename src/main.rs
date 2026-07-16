@@ -1,4 +1,7 @@
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, TableHandle};
+use redb::{
+    Database, MultimapTableHandle, ReadableDatabase, ReadableTable,
+    ReadableTableMetadata, TableDefinition, TableHandle,
+};
 use std::env;
 use std::error::Error;
 use std::fs;
