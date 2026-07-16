@@ -44,3 +44,6 @@ PowerShell:
 - `TableDefinition<&str, Vec<u8>>`
 - `TableDefinition<u64, Vec<u8>>`
 - `TableDefinition<&str, &str>`
+
+
+Note: this build copies the database file to the system temp directory before opening it, because redb 2.x opens database files with write access internally. Inspect a backup/copy when possible.

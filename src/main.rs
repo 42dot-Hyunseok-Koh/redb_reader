@@ -1,11 +1,12 @@
 use redb::{
-    Database, MultimapTableHandle, ReadableDatabase, ReadableTable,
-    ReadableTableMetadata, TableDefinition, TableHandle,
+    Database, MultimapTableHandle, ReadableTable, ReadableTableMetadata,
+    TableDefinition, TableHandle,
 };
 use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const CANDIDATE_TABLES: &[&str] = &[
     "log_entry",
@@ -59,9 +60,36 @@ fn parse_limit(args: &[String]) -> Option<usize> {
 }
 
 fn open_db(path: &PathBuf) -> Result<Database, Box<dyn Error>> {
-    // Opens read-only in practice because this program only starts read transactions.
-    // Make a backup before inspecting production DB files.
-    Ok(Database::open(path)?)
+    // redb 2.x opens the file with write access internally. To avoid touching the original
+    // database, inspect a temporary copy by default.
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("database.redb");
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis();
+    let temp_path = env::temp_dir().join(format!(
+        "redb_reader_{}_{}_{}",
+        std::process::id(),
+        timestamp_ms,
+        sanitize_filename(file_name)
+    ));
+    fs::copy(path, &temp_path)?;
+    eprintln!("Opening temporary copy: {}", temp_path.display());
+    Ok(Database::open(temp_path)?)
+}
+
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn scan_strings(path: &PathBuf) -> Result<(), Box<dyn Error>> {
@@ -126,56 +154,56 @@ fn dump_tables(path: &PathBuf, table: Option<&str>, limit: usize) -> Result<(), 
 
     for name in names {
         println!("\n=== table: {name} ===");
-        if dump_str_vec_u8(&txn, &name, limit).is_ok() {
+        if dump_str_bytes(&txn, &name, limit).is_ok() {
             continue;
         }
-        if dump_u64_vec_u8(&txn, &name, limit).is_ok() {
+        if dump_u64_bytes(&txn, &name, limit).is_ok() {
             continue;
         }
         if dump_str_str(&txn, &name, limit).is_ok() {
             continue;
         }
         eprintln!("Could not open '{name}' with supported type guesses.");
-        eprintln!("Tried: <&str, Vec<u8>>, <u64, Vec<u8>>, <&str, &str>.");
+        eprintln!("Tried: <&str, &[u8]>, <u64, &[u8]>, <&str, &str>.");
     }
 
     Ok(())
 }
 
-fn dump_str_vec_u8(
+fn dump_str_bytes(
     txn: &redb::ReadTransaction,
     name: &str,
     limit: usize,
 ) -> Result<(), Box<dyn Error>> {
-    let def: TableDefinition<&str, Vec<u8>> = TableDefinition::new(name);
+    let def: TableDefinition<&str, &[u8]> = TableDefinition::new(name);
     let table = txn.open_table(def)?;
-    println!("type guess: key=&str, value=Vec<u8>, len={}", table.len()?);
+    println!("type guess: key=&str, value=&[u8], len={}", table.len()?);
     for (idx, item) in table.iter()?.enumerate() {
         if idx >= limit {
             println!("... truncated at {limit} rows");
             break;
         }
         let (k, v) = item?;
-        print_row(idx, k.value().as_bytes(), v.value().as_slice());
+        print_row(idx, k.value().as_bytes(), v.value());
     }
     Ok(())
 }
 
-fn dump_u64_vec_u8(
+fn dump_u64_bytes(
     txn: &redb::ReadTransaction,
     name: &str,
     limit: usize,
 ) -> Result<(), Box<dyn Error>> {
-    let def: TableDefinition<u64, Vec<u8>> = TableDefinition::new(name);
+    let def: TableDefinition<u64, &[u8]> = TableDefinition::new(name);
     let table = txn.open_table(def)?;
-    println!("type guess: key=u64, value=Vec<u8>, len={}", table.len()?);
+    println!("type guess: key=u64, value=&[u8], len={}", table.len()?);
     for (idx, item) in table.iter()?.enumerate() {
         if idx >= limit {
             println!("... truncated at {limit} rows");
             break;
         }
         let (k, v) = item?;
-        print_row(idx, &k.value().to_le_bytes(), v.value().as_slice());
+        print_row(idx, &k.value().to_le_bytes(), v.value());
         println!("  key_u64: {}", k.value());
     }
     Ok(())
